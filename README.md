@@ -21,7 +21,3 @@ The project serves as a practical environment for Application Security (AppSec) 
 - `services/` - Auxiliary services (File upload, Batch processing).
 - `utils/` - Utility classes and security functions (intentionally flawed).
 - `config/` - Configuration files.
-
-## Instructions
-
-Follow the guidelines described in the main assessment document of the test to report your findings, prioritize fixes, and communicate properly with the project stakeholders.
