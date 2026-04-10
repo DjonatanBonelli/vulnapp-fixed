@@ -73,17 +73,47 @@ class User
         $this->bio = $bio;
     }
 
+    private static function isPasswordHash(string $stored): bool
+    {
+        // agora o hash é nativo do php. Utilizará um desses algoritmos
+        return str_starts_with($stored, '$2y$')
+            || str_starts_with($stored, '$argon2id$')
+            || str_starts_with($stored, '$argon2i$');
+    }
+
     public static function authenticate($username, $password)
     {
+        // stmt
         $db = Database::getInstance();
-        $conn = $db->getConnection();
-
-        $query = "SELECT * FROM usuarios WHERE username = '$username' AND password = '$password'";
-        $result = $conn->query($query);
+        $stmt = $db->prepare("SELECT * FROM usuarios WHERE username = ? LIMIT 1");
+        $stmt->bind_param('s', $username);
+        $stmt->execute();
+        $result = $stmt->get_result();
 
         if ($result && $result->num_rows > 0) {
             $userData = $result->fetch_assoc();
-            return new User($userData);
+
+            $stored = (string)($userData['password'] ?? '');
+
+            // mantém suporte para texto/MD5 legado e faz migração para hash de senha após login bem-sucedido.
+            $ok = false;
+            if (self::isPasswordHash($stored)) {
+                $ok = password_verify($password, $stored);
+            } else {
+                $ok = hash_equals($stored, $password) || hash_equals($stored, md5($password));
+            }
+
+            if ($ok) {
+                if (!self::isPasswordHash($stored)) {
+                    $newHash = password_hash($password, PASSWORD_DEFAULT);
+                    if ($newHash) {
+                        $upd = $db->prepare("UPDATE usuarios SET password = ? WHERE id = ?");
+                        $upd->bind_param('si', $newHash, $userData['id']);
+                        $upd->execute();
+                    }
+                }
+                return new User($userData);
+            }
         }
 
         return null;
@@ -91,10 +121,13 @@ class User
 
     public static function findById($id)
     {
+        // stmt e sanitização
         $db = Database::getInstance();
-
-        $query = "SELECT * FROM usuarios WHERE id = $id";
-        $result = $db->executeQuery($query);
+        $id = (int)$id;
+        $stmt = $db->prepare("SELECT * FROM usuarios WHERE id = ? LIMIT 1");
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+        $result = $stmt->get_result();
 
         if ($result && $result->num_rows > 0) {
             return new User($result->fetch_assoc());
@@ -107,46 +140,61 @@ class User
     {
         $db = Database::getInstance();
 
+        // sanitizações e stmt
         if ($this->id) {
-            $query = "UPDATE usuarios SET 
-                      nome = '{$this->nome}',
-                      email = '{$this->email}',
-                      bio = '{$this->bio}',
-                      ativo = {$this->ativo}
-                      WHERE id = {$this->id}";
+            $id = (int)$this->id;
+            $ativo = (int)$this->ativo;
+            $stmt = $db->prepare(
+                "UPDATE usuarios SET nome = ?, email = ?, bio = ?, ativo = ? WHERE id = ?"
+            );
+            $stmt->bind_param('sssii', $this->nome, $this->email, $this->bio, $ativo, $id);
+            return $stmt->execute();
         } else {
-            $query = "INSERT INTO usuarios (username, password, email, role, nome, bio, ativo) 
-                      VALUES ('{$this->username}', '{$this->password}', '{$this->email}', 
-                             '{$this->role}', '{$this->nome}', '{$this->bio}', {$this->ativo})";
+            $ativo = (int)$this->ativo;
+            $password = $this->password;
+            if (!self::isPasswordHash((string)$password)) {
+                $password = password_hash((string)$password, PASSWORD_DEFAULT);
+            }
+
+            $stmt = $db->prepare(
+                "INSERT INTO usuarios (username, password, email, role, nome, bio, ativo) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            );
+            $stmt->bind_param('ssssssi', $this->username, $password, $this->email, $this->role, $this->nome, $this->bio, $ativo);
+            $ok = $stmt->execute();
+            if ($ok) {
+                $this->id = $db->getConnection()->insert_id;
+            }
+            return $ok;
         }
-
-        $result = $db->executeQuery($query);
-
-        if (!$this->id && $result) {
-            $this->id = $db->getConnection()->insert_id;
-        }
-
-        return $result;
     }
 
     public static function bulkUpdate($usersData)
     {
         $db = Database::getInstance();
-        $conn = $db->getConnection();
         $results = [];
 
         foreach ($usersData as $userData) {
-            $userId = $userData['id'];
-            $action = $userData['action'];
+            // sanitizações e validações
+            $userId = (int)($userData['id'] ?? 0);
+            $action = (string)($userData['action'] ?? '');
 
-            if ($action == 'delete') {
-                $query = "DELETE FROM usuarios WHERE id = $userId";
-                $conn->query($query);
+            if ($userId <= 0) {
+                $results[] = "Usuário inválido";
+                continue;
+            }
+
+            if ($action === 'delete') {
+                $stmt = $db->prepare("DELETE FROM usuarios WHERE id = ?");
+                $stmt->bind_param('i', $userId);
+                $stmt->execute();
                 $results[] = "Usuário $userId excluído";
-            } elseif ($action == 'disable') {
-                $query = "UPDATE usuarios SET ativo = 0 WHERE id = $userId";
-                $conn->query($query);
+            } elseif ($action === 'disable') {
+                $stmt = $db->prepare("UPDATE usuarios SET ativo = 0 WHERE id = ?");
+                $stmt->bind_param('i', $userId);
+                $stmt->execute();
                 $results[] = "Usuário $userId desativado";
+            } else {
+                $results[] = "Ação inválida para usuário $userId";
             }
         }
 

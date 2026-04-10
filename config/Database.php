@@ -6,11 +6,12 @@ class Database {
     private $connection;
     
     private function __construct() {
+        // variáveis em .env
         $config = [
-            'host' => 'localhost',
-            'user' => 'root',
-            'password' => 'P@ssw0rd123',
-            'dbname' => 'app_sistema'
+            'host' => getenv('DB_HOST') ?: 'localhost',
+            'user' => getenv('DB_USER') ?: 'root',
+            'password' => getenv('DB_PASS') ?: '',
+            'dbname' => getenv('DB_NAME') ?: 'app_sistema'
         ];
         
         $this->connection = new \mysqli(
@@ -21,8 +22,12 @@ class Database {
         );
         
         if ($this->connection->connect_error) {
-            die("Falha na conexão: " . $this->connection->connect_error);
+            // evita vazar erros detalhados
+            throw new \RuntimeException("Falha na conexão com o banco de dados.");
         }
+
+        // evita escapes de caracteres 
+        $this->connection->set_charset('utf8mb4');
     }
     
     public static function getInstance() {
@@ -37,7 +42,17 @@ class Database {
     }
     
     public function executeQuery($sql) {
-        return $this->connection->query($sql);
+        // função desabilitada por execução insegura de sql 
+        throw new \RuntimeException("Execução de SQL cru desabilitada. Utilize a nova função: prepare()");
+    }
+
+    // nova função com queries stmt
+    public function prepare(string $sql): \mysqli_stmt {
+        $stmt = $this->connection->prepare($sql);
+        if (!$stmt) {
+            throw new \RuntimeException("Falha ao preparar query.");
+        }
+        return $stmt;
     }
     
     public function escapeString($string) {
